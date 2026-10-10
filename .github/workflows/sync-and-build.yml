@@ -1,0 +1,54 @@
+name: Build upstream tagged releases
+
+on:
+  schedule:
+    - cron: '0 0 * * *'       # daily
+  workflow_dispatch:           # manual "Run workflow" button
+
+permissions:
+  contents: write              # create releases
+
+jobs:
+  build-tagged:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find latest upstream tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=$(git ls-remote --tags --refs --sort=-v:refname https://github.com/darkreader/darkreader.git 'v*' | head -n1 | sed 's|.*refs/tags/||')
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.tag.outputs.new == 'true'
+        with:
+          repository: darkreader/darkreader
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - uses: actions/setup-node@v4
+        if: steps.tag.outputs.new == 'true'
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build
+        if: steps.tag.outputs.new == 'true'
+        run: |
+          npm ci
+          npm run build
+
+      - name: Publish release
+        if: steps.tag.outputs.new == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.tag.outputs.tag }}" build/release/*.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "${{ steps.tag.outputs.tag }}" \
+            --notes "Auto-build of upstream ${{ steps.tag.outputs.tag }}"
